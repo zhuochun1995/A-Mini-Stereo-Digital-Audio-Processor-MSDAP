@@ -1,0 +1,1475 @@
+--v3.3
+------------------------- Adder ------------------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+
+
+entity ADDER is port 
+(		
+		x1 	    : in std_logic_vector (23 DOWNTO 0);
+		x2 	    : in std_logic_vector (23 DOWNTO 0);
+		add_sub : in std_logic;
+		y	      : out std_logic_vector (23 DOWNTO 0)
+);
+end ADDER;
+
+architecture RTL of ADDER is
+begin
+	y <= (x1 + x2) when(add_sub = '0') else (not(x2+x1)+1);
+
+end RTL;
+
+-------------------------------- ALU Component ---------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity ALU is port
+(
+		clk     	 :in std_logic;
+		load  	   :in std_logic;
+		shift	   	:in std_logic;
+		clr		     :in std_logic;
+		add_sub   :in std_logic;
+		datain		  :in std_logic_vector (15 DOWNTO 0);
+		dataout		 :out std_logic_vector (39 DOWNTO 0)
+);
+end ALU;
+
+architecture RTL of ALU is
+  
+	component SIGN_EXT port
+	(
+		datain 	 	: in std_logic_vector (15 DOWNTO 0);
+		dataout  	: out std_logic_vector (23 DOWNTO 0)
+	);
+	end component;
+	
+	component ADDER port 
+	(		
+		x1 	: in std_logic_vector (23 DOWNTO 0);
+		x2 	: in std_logic_vector (23 DOWNTO 0);
+		add_sub: in std_logic;
+		y  	: out std_logic_vector (23 DOWNTO 0)
+	);
+	end component;
+	
+	component SHIFT_RIGHT port 
+	(
+		clk		: in std_logic;
+		clr		: in std_logic;
+		shift		: in std_logic;
+		load		: in std_logic;
+		datain 		 : in std_logic_vector (23 DOWNTO 0);
+		dataout 		: out std_logic_vector (39 DOWNTO 0)
+	);
+	end component;
+	
+	signal datain_extended	:std_logic_vector (23 DOWNTO 0);
+	signal accum_out		     :std_logic_vector (23 DOWNTO 0);
+	signal shiftreg_out	   :std_logic_vector (39 DOWNTO 0);
+	
+begin
+-- Instantiate
+	sign_extender:SIGN_EXT
+	port map
+	(
+		datain 	=>datain,
+		dataout	=>datain_extended
+	);
+	
+	accumulator :ADDER
+	  port map
+	  (
+		x1 		=>datain_extended,
+		x2 		=>shiftreg_out(39 downto 16),
+		y	   =>accum_out,
+		add_sub => add_sub
+	  );
+			
+	shiftreg:SHIFT_RIGHT
+		port map
+		(
+			datain 	 =>accum_out,
+			clk	     =>clk,
+			load	    =>load,
+			shift    =>shift,
+			clr	     =>clr,
+			dataout	 =>shiftreg_out
+		);
+	    dataout<=shiftreg_out;
+end RTL;
+
+------------ Finite State Machine for ALU Controller ------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity ALU_controller is port
+(
+		sclk     	          :in std_logic;
+		enable_fir    	     :in std_logic;
+		clr_fir             :in std_logic;
+		sleep_fir           :in std_logic;
+		frame		             :in std_logic;
+		rj		                :in std_logic_vector (7 DOWNTO 0);
+		coeff		             :in std_logic_vector (7 DOWNTO 0);
+		rj_addr		           :out std_logic_vector (3 DOWNTO 0);		
+		coeff_addr	         :out std_logic_vector (8 DOWNTO 0);
+		data_addr	          :out std_logic_vector (7 DOWNTO 0);
+		clr_alu		           :out std_logic;
+		load_alu	           :out std_logic;
+		shift_alu	          :out std_logic;
+		load_dataout        :out std_logic;
+		dataout_ready       :out std_logic			
+);
+end ALU_CONTROLLER;
+
+architecture RTL of ALU_CONTROLLER is
+
+	type state_type is (init,start,accumulate,shift_right,output_ready);
+	signal state					            :state_type;
+	signal rj_count 			          :std_logic_vector (3 DOWNTO 0);
+	signal coeff_count,coeff_count_lim	  :std_logic_vector (7 DOWNTO 0);
+	signal coeff_addr_s  			      :std_logic_vector (8 DOWNTO 0);
+	signal dataout_count		       :std_logic_vector (1 DOWNTO 0);
+
+begin	
+alu_fsm: process (sclk,clr_fir)
+	begin
+		if (clr_fir='1') then
+			rj_count        <= (rj_count'range => '0');
+			coeff_count     <=(coeff_count'range => '0');
+			coeff_addr_s    <=(coeff_addr_s'range => '0');
+			coeff_count_lim <=(coeff_count_lim'range => '0');
+			dataout_count   <=B"10";
+			clr_alu        <='1';
+			load_alu       <='0';
+			shift_alu      <='0';
+			load_dataout   <='0';
+			dataout_ready  <='0';
+			state          <=init;
+			
+		elsif (sclk 'event and sclk = '1') then --rising edge is preferred
+			if(sleep_fir='1') then
+				rj_count        <= (rj_count'range => '0');
+			  coeff_count     <=(coeff_count'range => '0');
+			  coeff_addr_s    <=(coeff_addr_s'range => '0');
+			  coeff_count_lim <=(coeff_count_lim'range => '0');
+				dataout_count <=B"01";
+				clr_alu       <='1';
+				load_alu      <='0';
+				shift_alu     <='0';
+				load_dataout  <='0';
+				dataout_ready <='0';
+				state         <=init;
+				
+			elsif (enable_fir = '1') then
+				case state is
+					when init =>
+						rj_count        <=(rj_count'range => '0');
+			      coeff_count     <=(coeff_count'range => '0');
+			      coeff_addr_s    <=(coeff_addr_s'range => '0');
+			      coeff_count_lim <=(coeff_count_lim'range => '0');
+						clr_alu       <='1';
+						load_alu      <='0';
+						shift_alu     <='0';
+						load_dataout  <='0';
+						dataout_ready <='0';
+						state         <=start;
+						
+					when start =>
+						rj_count        <=(rj_count'range => '0');
+			      coeff_count     <=X"01";
+			      coeff_addr_s    <=(coeff_addr_s'range => '0');
+			      coeff_count_lim <=rj;
+						shift_alu     <='0';
+						load_dataout  <='0';
+						if(frame='1') then
+							rj_count    <=(rj_count'range => '0');
+							load_alu    <='1';
+							clr_alu     <='0';
+							state       <=accumulate;
+						else 
+							rj_count    <=rj_count;
+							load_alu    <='0';
+							clr_alu     <='1';
+							state       <=start;
+						end if;
+						
+					when accumulate =>
+						load_alu      <='1';
+						clr_alu       <='0';
+						shift_alu     <='0';
+						load_dataout  <='0';
+						if(coeff_count<coeff_count_lim) then
+							rj_count    <=rj_count;
+							coeff_count  <=coeff_count+1;
+							coeff_addr_s <=coeff_addr_s+1;
+							load_alu     <='1';
+							shift_alu    <='0';
+							state        <=accumulate;
+						else 
+							rj_count     <=rj_count+1;
+							coeff_count   <=coeff_count;
+							coeff_addr_s  <=coeff_addr_s;
+							load_alu     <='0';
+							shift_alu    <='1';
+							state        <=shift_right;
+						end if;
+						
+					when shift_right => -- shift the signal to the right
+						rj_count    <=rj_count;
+						coeff_count  <=X"01";
+						if(coeff_count_lim /=0) then
+							coeff_addr_s<=coeff_addr_s+1;
+						end if;
+						coeff_count_lim  <=rj;
+						clr_alu      <='0';
+						shift_alu    <='0';
+						load_dataout <='0';
+						
+						if(rj_count=X"0") then
+							load_alu<='0';
+							if(dataout_count=0) then
+								dataout_count<=dataout_count;
+							else 
+								dataout_count<=dataout_count-1;
+							end if;
+							state        <=output_ready;
+						else 
+							load_alu     <='1';
+							dataout_count<=dataout_count;
+							state        <=accumulate;
+						end if;
+						
+					when output_ready =>   -- ready to send output(signal to ALU)
+						rj_count       <=rj_count;
+						coeff_count    <=coeff_count;
+						coeff_addr_s   <=coeff_addr_s;
+						coeff_count_lim <=coeff_count_lim;
+						clr_alu       <='0';
+						shift_alu     <='0';
+						load_alu      <='0';
+						load_dataout  <='1';
+						if(dataout_count=0) then
+							dataout_ready<='1';
+						else 
+							dataout_ready<='0';
+						end if;
+						state          <=start;
+					end case;
+				end if;
+		end if;
+	end process;
+	
+        -- output assignment
+	rj_addr<=rj_count;
+	coeff_addr<=coeff_addr_s;
+	data_addr<=coeff;
+
+
+end RTL;
+
+
+
+----------------- Coeff memory with 512 entries 512=2e9 memory -up all good!---------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity COEFFMEM is port
+(
+	clk	: in std_logic;
+	clr	: in std_logic;
+	wen	: in std_logic;
+	r_addr 	: in std_logic_vector (8 DOWNTO 0);
+	w_addr 	: in std_logic_vector (8 DOWNTO 0);
+	datain	 : in std_logic_vector (8 DOWNTO 0);
+	dataout	: out std_logic_vector (8 DOWNTO 0)
+);
+end COEFFMEM;
+
+architecture RTL of COEFFMEM is
+	constant MEMSIZE:integer := 512;
+	constant WORDSIZE: integer:=9;
+	subtype wordtype is std_logic_vector(8 downto 0);
+	type memtype is array(0 to 511) of wordtype;
+	signal MEM: memtype;
+	
+	begin
+		memory:process(clk,clr)
+			begin
+				--clear memory
+				if(clr='1')then
+					for j in 0 to 511 loop
+						MEM(j)<=(MEM(j)'range => '0');
+					end loop;
+
+				--write into the memory
+				elsif (clk'event and clk = '1') then
+					if(wen ='1') then
+					 MEM(conv_integer(w_addr))<=datain;
+					end if;
+				end if;
+			end process;
+	--read memory
+	dataout <=MEM(conv_integer(r_addr));
+end RTL;
+
+-------------------------------- DATA FIFO -------all good-----------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity DATAFIFO is port
+(
+	clk	    : in std_logic;
+	clr	    : in std_logic;
+	wen	    : in std_logic;
+	allzeros: out std_logic;
+	addr 	  : in std_logic_vector (7 DOWNTO 0);
+	datain	 : in std_logic_vector (15 DOWNTO 0);
+	dataout	: out std_logic_vector (15 DOWNTO 0)
+);
+end DATAFIFO;
+
+architecture RTL of DATAFIFO is
+	constant MEMSIZE :integer := 256;
+	constant WORDSIZE:integer := 16;
+	subtype wordtype is std_logic_vector(15 DOWNTO 0);
+	type memtype is array (0 to 255) of wordtype;
+	signal MEM :memtype;
+	signal write_addr:	wordtype;
+	signal read_addr:	wordtype;
+
+	begin
+		memory: process(clk,clr)
+			begin
+				--clear
+				if(clr='1')then
+					for j in 0 to 255 loop
+						MEM(j)<=(MEM(j)'range =>'0');
+					end loop;
+					write_addr<=(write_addr'range =>'0');
+					allzeros<='0';
+
+				--write
+				elsif (clk'event and clk ='1') then
+					if(wen ='1') then
+					 MEM(conv_integer(write_addr)mod MEMSIZE)<=datain;
+					 if (datain =X"0000") then
+					 	allzeros<='1';
+					 else
+					 	allzeros<='0';
+					 end if;
+					 write_addr<=write_addr+1;
+					end if;
+				end if;
+			end process;
+	--read 
+	read_addr<=(write_addr-1) -addr;
+	dataout <=MEM(conv_integer(read_addr) mod MEMSIZE);
+end RTL;
+
+
+
+--------------------------------- DATAPATH  --------------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity DATAPATH is port
+(
+	sclk		        : in std_logic;
+	dclk		        : in std_logic;
+	reset_n		     : in std_logic;
+	frame		       : in std_logic;
+	load_rj		     : in std_logic;
+	load_coeff	   : in std_logic;
+	load_data	    : in std_logic;
+	en_fir	       : in std_logic;
+	clr_s2p	      : in std_logic;
+	clr_p2s	      : in std_logic;
+	clr_rj		      : in std_logic;
+	clr_coeff	    : in std_logic;
+	clr_data 	    : in std_logic;
+	clr_fir		     : in std_logic;
+	sleep_fir		   : in std_logic;
+	rj_w_addr 	    : in std_logic_vector (3 DOWNTO 0);
+	coeff_w_addr	  : in std_logic_vector (8 DOWNTO 0);
+	sdatain       : in std_logic;
+	sdataout		    : out std_logic;
+	dataout_ready	: out std_logic;
+	allzeros	     : out std_logic;
+	sum_rj        : out std_logic_vector(8 downto 0)
+);
+end DATAPATH;
+
+architecture RTL of DATAPATH is
+
+component RJMEM port
+(
+	clk	    : in std_logic;
+	clr	    : in std_logic;
+	wen	    : in std_logic;
+	r_addr 	: in std_logic_vector (3 DOWNTO 0);
+	w_addr 	: in std_logic_vector (3 DOWNTO 0);
+	datain	 : in std_logic_vector (7 DOWNTO 0);
+	dataout	: out std_logic_vector(7 DOWNTO 0);
+	sum_rj  : out std_logic_vector(8 downto 0)
+);
+end component;
+
+component COEFFMEM port
+(
+	clk	: in std_logic;
+	wen	: in std_logic;
+	clr	: in std_logic;
+	r_addr 	: in std_logic_vector (8 DOWNTO 0);
+	w_addr 	: in std_logic_vector (8 DOWNTO 0);
+	datain	 : in std_logic_vector (8 DOWNTO 0);
+	dataout	: out std_logic_vector (8 DOWNTO 0)
+);
+end component;
+
+component DATAFIFO port
+(
+	clk    	: in std_logic;
+	clr	    : in std_logic;
+	wen	    : in std_logic;
+	addr 	  : in std_logic_vector (7 DOWNTO 0);
+	datain	 : in std_logic_vector (15 DOWNTO 0);
+	allzeros: out std_logic;
+	dataout	: out std_logic_vector (15 DOWNTO 0)
+);
+end component;
+
+component S2P port
+(
+	clk	 : in std_logic;
+	clr	 : in std_logic;
+	sin  : in std_logic;
+	pout	: out std_logic_vector (15 DOWNTO 0)
+);
+end component;
+
+component P2S
+generic (N: integer := 40); 
+port
+(
+  pin 	      : in std_logic_vector(N-1 DOWNTO 0);
+	clk	       : in std_logic;
+	load	      : in std_logic;
+	frame	     : in std_logic;
+	reset	     : in std_logic;
+	sdata_ready: out std_logic;
+	sout 	     : out std_logic
+);
+end component;
+
+
+
+component FIR  port
+(
+	sclk     	     :in std_logic;
+	enable_fir    	:in std_logic;
+	clr_fir        :in std_logic;
+	sleep_fir      :in	std_logic;
+	frame	        	:in std_logic;
+  rj		           :in std_logic_vector (7 DOWNTO 0);
+  coeff	        	:in std_logic_vector (8 DOWNTO 0);
+  datain         :in std_logic_vector (15 DOWNTO 0);
+  rj_addr		      :out std_logic_vector (3 DOWNTO 0);
+	coeff_addr	    :out std_logic_vector (8 DOWNTO 0);
+	data_addr	     :out std_logic_vector (7 DOWNTO 0);
+	dataout	       :out std_logic_vector (39 DOWNTO 0);
+	load_dataout		 :out std_logic;
+  dataout_ready		:out std_logic	
+);
+end component;
+
+	signal rj_raddr    	     :std_logic_vector (3 DOWNTO 0):=X"0";
+	signal coeff_raddr    	  :std_logic_vector (8 DOWNTO 0):='0' & X"00";
+	signal data_addr      	  :std_logic_vector (7 DOWNTO 0):=X"00";
+	signal pdatain	 	        :std_logic_vector (15 DOWNTO 0);
+	signal pdataout 		       :std_logic_vector (39 DOWNTO 0);
+	signal rj_reg	 	         :std_logic_vector (7 DOWNTO 0);
+	signal coeff_reg 	       :std_logic_vector (8 DOWNTO 0);
+	signal datain_reg 	      :std_logic_vector (15 DOWNTO 0);
+	signal sdata_ready	      :std_logic;
+	signal dataout_ready_ctrl:std_logic;
+	signal load_p2s		        :std_logic;
+	
+
+begin
+
+	rj_memory:RJMEM port map
+	(
+		clk     =>frame,
+		wen	    =>load_rj,
+		clr	    =>clr_rj,
+		r_addr  =>rj_raddr,
+		w_addr  =>rj_w_addr,
+		datain	 =>pdatain(7 downto 0),
+		dataout =>rj_reg,
+		sum_rj  =>sum_rj
+	);
+
+	coeff_memory:COEFFMEM port map
+	(
+		clk	    =>frame,
+		clr	    =>clr_coeff,
+		wen	    =>load_coeff,
+		r_addr  =>coeff_raddr,
+		w_addr  =>coeff_w_addr,
+		datain	 =>pdatain(8 downto 0),
+		dataout	=>coeff_reg
+	);
+
+	data_memory :DATAFIFO port map
+	(
+		clk	    =>frame,
+		clr	    =>clr_data,
+		wen	    =>load_data,
+		allzeros=>allzeros,
+		addr 	  =>data_addr,
+		datain 	=>pdatain,
+		dataout	=>datain_reg
+	);
+
+	serial2parallel:S2P port map
+	(
+		clk 	=>dclk,
+		clr 	=>clr_s2p,
+		sin	 =>sdatain,
+		pout	=>pdatain
+	);
+
+	parallel2serial: P2S port map 
+	(
+		clk	        =>sclk,
+		load       	=>load_p2s,
+		frame       =>frame,
+		reset	      =>clr_p2s,
+		pin 	       =>pdataout,
+		sdata_ready =>sdata_ready,
+		sout 	      =>sdataout
+	);
+
+
+	fir_filter: FIR  port map
+	(
+	sclk     	     =>sclk,
+	enable_fir    	=>en_fir,
+	clr_fir        =>clr_fir,
+	sleep_fir      =>sleep_fir,
+	frame	        	=>frame,
+  rj		           =>rj_reg,
+  coeff	        	=>coeff_reg,
+  datain         =>datain_reg,
+  rj_addr		      =>rj_raddr,
+	coeff_addr	    =>coeff_raddr,
+	data_addr	     =>data_addr,
+	dataout	       =>pdataout,
+	load_dataout		 =>load_p2s,
+  dataout_ready		=>dataout_ready_ctrl
+	);
+	
+	dataout_ready <= sdata_ready and dataout_ready_ctrl;
+end RTL;
+
+
+----------------------FIR--------------------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity FIR is port
+(
+	sclk		         : in std_logic;
+	enable_fir	    : in std_logic;
+	clr_fir		      : in std_logic;
+	sleep_fir		    : in std_logic;
+	frame		        : in std_logic;
+	rj		           : in std_logic_vector(7 downto 0);
+	coeff	         : in std_logic_vector(8 downto 0);
+	datain	        : in std_logic_vector(15 downto 0);	
+	rj_addr	       : out std_logic_vector(3 downto 0);
+	coeff_addr	    : out std_logic_vector(8 downto 0);
+	data_addr      : out std_logic_vector(7 downto 0);
+	dataout		      : out std_logic_vector(39 downto 0);
+	load_dataout	  : out std_logic;
+	dataout_ready	 : out std_logic);
+end FIR;
+
+architecture RTL of FIR is
+  component ALU 
+    port (
+      clr     :in std_logic;
+      load    :in std_logic;
+      shift   :in std_logic;
+      clk     :in std_logic;
+      add_sub :in std_logic;
+      datain  :in std_logic_vector  (15 downto 0);
+      dataout :out std_logic_vector (39 downto 0)   
+    );
+  end component;
+  
+
+component ALU_CONTROLLER port
+(
+	sclk		         : in std_logic;
+	enable_fir	    : in std_logic;
+	clr_fir		      : in std_logic;
+	sleep_fir		    : in std_logic;
+	frame		        : in std_logic;
+	rj		           : in std_logic_vector(7 downto 0);
+	coeff	         : in std_logic_vector(7 downto 0);	
+	rj_addr	       : out std_logic_vector(3 downto 0);
+	coeff_addr	    : out std_logic_vector(8 downto 0);
+	data_addr      : out std_logic_vector(7 downto 0);
+	clr_alu        : out std_logic;
+	load_alu       : out std_logic;
+	shift_alu      : out std_logic;
+	load_dataout	  : out std_logic;
+	dataout_ready	 : out std_logic
+);
+end component;
+
+signal clr_alu,load_alu,shift_alu :std_logic;
+
+begin
+  
+arith_alu :ALU port map
+(
+  clr     => clr_alu,
+  load    => load_alu,
+  shift   => shift_alu,
+  clk     => sclk,
+  add_sub => coeff(8),
+  datain  => datain,
+  dataout => dataout
+);
+
+alu_ctrl : ALU_Controller
+port map(
+	sclk		         => sclk,
+	enable_fir	    => enable_fir,
+	clr_fir		      => clr_fir,
+	sleep_fir		    => sleep_fir,
+	frame		        => frame,
+	rj		           => rj,
+	coeff	         => coeff(7 downto 0),
+	rj_addr	       => rj_addr,
+	coeff_addr	    => coeff_addr,
+	data_addr      => data_addr,
+	clr_alu        => clr_alu,
+	load_alu       => load_alu,
+	shift_alu      => shift_alu,
+	load_dataout	  => load_dataout,
+	dataout_ready	 => dataout_ready
+);
+end RTL;
+
+
+----------------------------------------Main FSM ------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+ 
+entity MAIN_CONTROLLER is port
+(
+	sclk		           : in std_logic;
+	dclk		           : in std_logic;
+	start		          : in std_logic;
+	reset_n		        : in std_logic;
+	frame		          : in std_logic;
+	allzerosL	       : in std_logic;
+	allzerosR	       : in std_logic;
+	sum_rj           : in std_logic_vector(8 downto 0);
+	dataout_readyL	  : in std_logic;
+	dataout_readyR	  : in std_logic;
+	load_rj		        : out std_logic;
+	load_coeff       : out std_logic;
+	load_data	       : out std_logic;
+	en_fir	          : out std_logic;
+	clr_s2p	         : out std_logic;
+	clr_p2s	         : out std_logic;
+	clr_rj		         : out std_logic;
+	clr_coeff	       : out std_logic;
+	clr_data	        : out std_logic;
+	clr_fir		        : out std_logic;
+	sleep_fir        : out std_logic;
+	rj_w_addr	       : out std_logic_vector (3 DOWNTO 0);
+	coeff_w_addr	    : out std_logic_vector (8 DOWNTO 0);
+	inready 	        : out std_logic;
+	outready         : out std_logic
+);
+end MAIN_CONTROLLER;
+
+architecture BEHAVIORAL of MAIN_CONTROLLER is
+
+type state_type is (init,wait_rj,receive_rj,wait_coeff,receive_coeff,wait_data,working,clearing,sleeping);
+signal state :state_type;
+signal count_done,allzeros,reset_count800,en_count800,reset_countfsm,en_countfsm,countfsm_done,dataout_ready :std_logic;
+signal zero_counter			:std_logic_vector (9 DOWNTO 0);
+signal countfsm,countfsm_limit 	:std_logic_vector (8 DOWNTO 0);
+signal rj_waddress_s 				:std_logic_vector (3 DOWNTO 0);
+signal coeff_waddress_s 			:std_logic_vector (8 DOWNTO 0);
+
+begin
+
+	main_fsm:process(sclk,start)
+	begin
+	--------------------- State 0 Initialization-------------------
+		if (start='1') then
+			state <=init;
+		elsif (sclk 'event and sclk = '0') then 
+			case state is
+			when init =>
+				inready		     	<='0';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='0';
+				load_coeff   		<='0';
+				en_fir     		<='0';
+				clr_s2p		     	<='1';
+				clr_p2s		 	<='1';
+				clr_rj		        <='1';
+				clr_coeff	    	<='1';
+				clr_data		     <='1';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<=(countfsm_limit'range =>'0');
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s 	<=(rj_waddress_s'range =>'0');
+				coeff_waddress_s<=(coeff_waddress_s'range =>'0');
+				state 		      	<=wait_rj;
+				
+	-------------------------S1 waiting to recieve rj--------------------
+			when wait_rj =>
+				inready			<='1';
+				outready		<='0';
+				load_rj			<='0';
+				load_data		<='0';
+				load_coeff		<='0';
+				en_fir                  <='0';
+				clr_s2p			<='0';
+				clr_p2s			<='1';
+				clr_rj			<='0';
+				clr_coeff		<='0';
+				clr_data		<='0';
+				clr_fir			<='1';
+				sleep_fir		<='0';
+				reset_count800          <='1';
+				en_count800		<='0';
+				countfsm_limit		<='0' & X"0F";
+				reset_countfsm		<='1';
+				en_countfsm		<='0';
+				rj_waddress_s		<=(rj_waddress_s'range =>'0');
+				coeff_waddress_s	<=coeff_waddress_s;
+				if frame ='1' then
+					state 			<=receive_rj;
+				else 	
+					state 			<=wait_rj;
+				end if;
+				
+	-------------------------S2 reading recieve rj-----------------------	
+			when receive_rj =>
+				inready		     	<='1';
+				outready	     	<='0';
+				load_rj		     	<='1';
+				load_data    		<='0';
+				load_coeff   		<='0';
+				en_fir                  <='0';
+				clr_s2p		     	<='0';
+				clr_p2s			<='1';
+				clr_rj		        <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='0';
+				en_count800		  <='0';
+				countfsm_limit	<= countfsm_limit;
+				reset_countfsm	<='0';
+				en_countfsm		  <='1';
+				rj_waddress_s	  <=countfsm(3 downto 0);
+				coeff_waddress_s  	<=coeff_waddress_s;
+				
+				if countfsm_done ='1' then
+					reset_countfsm <='1';
+					en_countfsm		<='0';
+					state 			<=wait_coeff;
+				else 	
+					state 			<=receive_rj;
+				end if;
+				
+	-------------------------S3 waiting to recieve coeff--------------------
+			when wait_coeff =>
+				inready		     	<='1';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='0';
+				load_coeff   		<='0';
+				en_fir         <='0';
+				clr_s2p		     	<='0';
+				clr_p2s			     <='1';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<= sum_rj;
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s   	<=rj_waddress_s;
+				coeff_waddress_s	<=(coeff_waddress_s'range=>'0');
+				
+				if frame ='1' then
+					state 			<=receive_coeff;
+				else 	
+					state 			<=wait_coeff;
+					end if;
+				
+				
+        -------------------------S4 reading coeff ------------------------
+			when receive_coeff =>
+				inready		     	<='1';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='0';
+				load_coeff   		<='1';
+				en_fir     <='0';
+				clr_s2p		     	<='0';
+				clr_p2s			     <='1';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<= countfsm_limit;
+				reset_countfsm	<='0';
+				en_countfsm		  <='1';
+				rj_waddress_s	      	<=rj_waddress_s;
+				coeff_waddress_s    	<=countfsm;
+				
+				if countfsm_done ='1' then
+					reset_countfsm <='1';
+					en_countfsm		<='0';
+					state 			<=wait_data;
+				else 	
+					state 			<=receive_coeff;
+				end if;
+				
+        ------------------------- S5 recieve data ----------------------------
+			when wait_data =>
+				inready		     	<='1';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='0';
+				load_coeff   		<='0';
+				en_fir         <='0';
+				clr_s2p		     	<='0';
+				clr_p2s			     <='1';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<= (countfsm_limit'range =>'0');
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s	      	<=rj_waddress_s;
+				coeff_waddress_s    	<=coeff_waddress_s;
+				
+				if reset_n ='0' then
+				  	state 	<=clearing;
+				elsif frame ='1' then
+					 state 	<=working;
+				else 	
+					 state 	<=wait_data;
+				end if;
+
+        ------------------------- S6 working mode ----------------------------
+        
+			when working =>
+				inready		     	<='1';
+				--outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='1';
+				load_coeff   		<='0';
+				en_fir     <='1';
+				clr_s2p		     	<='0';
+				clr_p2s			     <='0';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='0';
+				sleep_fir		    <='0';
+				reset_count800 <='0';
+				en_count800		  <='1';
+				countfsm_limit	<= (countfsm_limit'range =>'0');
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s	      	<=rj_waddress_s;
+				coeff_waddress_s    	<=coeff_waddress_s;
+				
+				if dataout_ready ='1' then
+					outready <='1';
+				else outready<='0';
+				end if;
+				
+				if reset_n ='0' then
+					state <=clearing;
+				elsif (count_done='1' and allzeros='1') then
+					inready <='0';
+					state <=sleeping;
+				else 	
+					state <=working;
+				end if;
+				
+		---------------------------- S7 clearing mode ----------------------------
+			when clearing =>
+				inready		     	<='0';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='0';
+				load_coeff   		<='0';
+				en_fir         <='0';
+				clr_s2p		     	<='1';
+				clr_p2s			     <='1';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='1';
+				clr_fir			     <='1';
+				sleep_fir		    <='0';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<= (countfsm_limit'range =>'0');
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s	      	<=rj_waddress_s;
+				coeff_waddress_s    	<=coeff_waddress_s;
+				
+				if reset_n ='1' then
+					state 	<=wait_data;
+				else 	
+					state 	<=clearing;
+				end if;
+				
+		   ------------------------- S8 sleeping mode ----------------------------
+			when sleeping =>
+				inready		     	<='1';
+				outready	     	<='0';
+				load_rj		     	<='0';
+				load_data    		<='1';
+				load_coeff   		<='0';
+				en_fir         <='0';
+				clr_s2p		     	<='0';
+				clr_p2s			     <='1';
+				clr_rj			      <='0';
+				clr_coeff	    	<='0';
+				clr_data		     <='0';
+				clr_fir			     <='1';
+				sleep_fir		    <='1';
+				reset_count800 <='1';
+				en_count800		  <='0';
+				countfsm_limit	<= (countfsm_limit'range =>'0');
+				reset_countfsm	<='1';
+				en_countfsm		  <='0';
+				rj_waddress_s	      	<=rj_waddress_s;
+				coeff_waddress_s    	<=coeff_waddress_s;
+				
+				if reset_n ='0' then
+					state 		<=clearing;
+				elsif allzeros ='0' then
+					state 		<=working;
+				else 	
+					state 		<=sleeping;
+				end if;
+			end case;
+		end if;
+	end process;
+
+
+----------------------------------count 800 zero --------------------------------------
+	count_800:process(dclk,reset_count800)
+	begin
+		if reset_count800='1' then
+			count_done<='0';
+			zero_counter<="0000000000";
+		elsif  dclk'event and dclk = '1' then
+			if frame ='1' and en_count800='1' then
+				if allzeros ='1' then
+					if zero_counter="1100011111" then
+						count_done<='1';
+						zero_counter<=zero_counter;
+					else 
+						count_done<='0';
+						zero_counter<=zero_counter+'1';
+					end if;
+				else 	
+					count_done<='0';
+					zero_counter<="0000000000";
+				end if;
+			end if;
+		end if; 
+	end process;
+
+
+---------------------------- counter to count when 16 rj values and sum rj coeff have been revieved
+---------------------------- the limit depends on whether rj or coeffs are being received
+	count_fsm:process(dclk,reset_countfsm)
+	begin
+		if reset_countfsm='1' then
+			countfsm_done<='0';
+			countfsm<=(countfsm'range =>'0');
+		elsif dclk'event and dclk = '1' then
+			if en_countfsm='1' and frame='1' then
+				if countfsm = countfsm_limit then
+					countfsm_done <='1';
+					countfsm <=countfsm;
+				else 	
+					countfsm_done<='0';
+					countfsm <= countfsm + '1';
+				end if;
+			end if;
+		end if;
+	end process;
+
+-- internal to output signal assignment
+
+	allzeros<=allzerosL and allzerosR;
+	dataout_ready<=dataout_readyL and dataout_readyR;
+	rj_w_addr<=rj_waddress_s;
+	coeff_w_addr<=coeff_waddress_s;
+end behavioral;
+
+----------------------------MSDAP TOP LEVEL-------------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity MSDAP is
+  port(
+      Sclk      :in std_logic;
+      Dclk      :in std_logic;
+      Start     :in std_logic;
+      Reset_n   :in std_logic;
+      Frame     :in std_logic;
+      InputL    :in std_logic;
+      InputR    :in std_logic;
+      InReady   :out std_logic;
+      OutReady  :out std_logic;
+      OutputL   :out std_logic;
+      OutputR   :out std_logic
+  );
+end MSDAP;
+
+architecture RTL of MSDAP is
+  component DATAPATH
+  port(
+ 	sclk		        : in std_logic;
+	dclk		        : in std_logic;
+	reset_n		     : in std_logic;
+	frame		       : in std_logic;
+	load_rj		     : in std_logic;
+	load_coeff	   : in std_logic;
+	load_data	    : in std_logic;
+	en_fir	       : in std_logic;
+	clr_s2p	      : in std_logic;
+	clr_p2s	      : in std_logic;
+	clr_rj		      : in std_logic;
+	clr_coeff	    : in std_logic;
+	clr_data 	    : in std_logic;
+	clr_fir		     : in std_logic;
+	sleep_fir		   : in std_logic;
+	rj_w_addr 	    : in std_logic_vector (3 DOWNTO 0);
+	coeff_w_addr	  : in std_logic_vector (8 DOWNTO 0);
+	sdatain       : in std_logic;
+	sdataout		    : out std_logic;
+	dataout_ready	: out std_logic;
+	allzeros	     : out std_logic;
+	sum_rj        : out std_logic_vector(8 downto 0)
+ );
+end component;
+
+component MAIN_CONTROLLER
+  port(
+ 	sclk		           : in std_logic;
+	dclk		           : in std_logic;
+	start		          : in std_logic;
+	reset_n		        : in std_logic;
+	frame		          : in std_logic;
+	allzerosL	       : in std_logic;
+	allzerosR	       : in std_logic;
+	sum_rj           : in std_logic_vector(8 downto 0);
+	dataout_readyL	  : in std_logic;
+	dataout_readyR	  : in std_logic;
+	load_rj		        : out std_logic;
+	load_coeff       : out std_logic;
+	load_data	       : out std_logic;
+	en_fir	          : out std_logic;
+	clr_s2p	         : out std_logic;
+	clr_p2s	         : out std_logic;
+	clr_rj		         : out std_logic;
+	clr_coeff	       : out std_logic;
+	clr_data	        : out std_logic;
+	clr_fir		        : out std_logic;
+	sleep_fir        : out std_logic;
+	rj_w_addr	       : out std_logic_vector (3 DOWNTO 0);
+	coeff_w_addr	    : out std_logic_vector (8 DOWNTO 0);
+	inready 	        : out std_logic;
+	outready         : out std_logic
+ 
+  );
+end component;
+
+signal dataout_readyL, dataout_readyR, allzerosL, allzerosR :std_logic:='0';
+signal load_rj, load_coeff, load_data, en_fir, clr_s2p, clr_p2s, clr_rj, clr_coeff, clr_data, clr_fir, sleep_fir: std_logic;
+signal rj_w_addr        : std_logic_vector(3 downto 0);
+signal coeff_w_addr     : std_logic_vector(8 downto 0);
+signal sum_rjL, sum_rjR : std_logic_vector(8 downto 0);
+
+begin 
+datapath_left : DATAPATH
+port map(
+  sclk          => Sclk,
+  dclk          => Dclk,
+  reset_n       => Reset_n,
+  frame         => Frame,
+  load_rj       => load_rj,
+  load_coeff    => load_coeff,
+  load_data     => load_data,
+  en_fir        => en_fir,
+  clr_s2p       => clr_s2p,
+  clr_p2s       => clr_p2s,
+  clr_rj        => clr_rj,
+  clr_coeff     => clr_coeff,
+  clr_data      => clr_data,
+  clr_fir       => clr_fir,
+  sleep_fir     => sleep_fir,
+  rj_w_addr     => rj_w_addr,
+  coeff_w_addr  => coeff_w_addr,
+  sdatain       => InputL,
+  sdataout      => OutputL,
+  dataout_ready => dataout_readyL,
+  allzeros      => allzerosL,
+  sum_rj        => sum_rjL
+);
+
+datapath_right : DATAPATH
+port map(
+  sclk          => Sclk,
+  dclk          => Dclk,
+  reset_n       => Reset_n,
+  frame         => Frame,
+  load_rj       => load_rj,
+  load_coeff    => load_coeff,
+  load_data     => load_data,
+  en_fir        => en_fir,
+  clr_s2p       => clr_s2p,
+  clr_p2s       => clr_p2s,
+  clr_rj        => clr_rj,
+  clr_coeff     => clr_coeff,
+  clr_data      => clr_data,
+  clr_fir       => clr_fir,
+  sleep_fir     => sleep_fir,
+  rj_w_addr     => rj_w_addr,
+  coeff_w_addr  => coeff_w_addr,
+  sdatain       => InputR,
+  sdataout      => OutputR,
+  dataout_ready => dataout_readyR,
+  allzeros      => allzerosR,
+  sum_rj        => sum_rjR
+);
+
+main_ctrl : MAIN_CONTROLLER
+port map(
+   
+ 	sclk		           => Sclk,
+	dclk		           => Dclk,
+	start		          => Start,
+	reset_n		        => Reset_n,
+	frame		          => Frame,
+	allzerosL	       => allzerosL,
+	allzerosR	       => allzerosR,
+	sum_rj           => sum_rjL,
+	dataout_readyL	  => dataout_readyL,
+	dataout_readyR	  => dataout_readyR,
+	load_rj		        => load_rj,
+	load_coeff       => load_coeff,
+	load_data	       => load_data,
+	en_fir	          => en_fir,
+	clr_s2p	         => clr_s2p,
+	clr_p2s	         => clr_p2s,
+	clr_rj		         => clr_rj,
+	clr_coeff	       => clr_coeff,
+	clr_data	        => clr_data,
+	clr_fir		        => clr_fir,
+	sleep_fir        => sleep_fir,
+	rj_w_addr	       => rj_w_addr,
+	coeff_w_addr	    => coeff_w_addr,
+	inready 	        => Inready,
+	outready         => Outready
+
+);
+end RTL;
+
+--------------------------------Parallel to series--------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity P2S is 
+generic(N : integer := 40);
+port
+(
+  pin         : in std_logic_vector(N-1 downto 0);
+	clk        	: in std_logic;
+	load       	: in std_logic;
+	frame      	: in std_logic;
+	reset       : in std_logic;
+	sdata_ready : out std_logic;
+	sout        : out std_logic
+);
+end P2S;
+
+architecture RTL of P2S is
+
+signal reg                :std_logic_vector((N-1) downto 0);
+signal countbit           :std_logic_vector(5 downto 0);
+signal sdata_ready_s, tx  :std_logic;
+
+begin
+	process(clk,reset)
+	begin
+		if (reset='1') then
+			reg <=(others=>'0');
+			sout<='0';
+		elsif clk'event and clk = '1' then
+		  if load = '1' then
+		    sout<='0';
+		    reg <= pin;
+		    elsif tx = '1' then
+		      sout <= reg(39);
+		      reg <= reg(38 downto 0) & '0';
+		      end if;
+		      end if;
+		      end process;
+		
+
+ shiftclk: process(clk,reset)
+ begin
+   if (reset ='1') then
+     countbit <= (others =>'0');
+     tx <= '0';
+     sdata_ready_s <= '0';
+   elsif clk'event and clk = '1' then
+     if frame ='1' and tx = '0' then
+       countbit <= B"101000";
+       tx<= '1';
+       sdata_ready_s <='0';
+       
+     else
+       if countbit > B"000000" then
+					countbit<=countbit-1;
+					tx<='1';
+					sdata_ready_s<='1';
+				else 
+					countbit<=countbit;
+					tx<='0';
+					sdata_ready<='0';
+				end if;
+			end if;
+		end if;
+	end process;
+
+	sdata_ready<=sdata_ready_s;
+
+end RTL;
+
+--------------------------------RJ Memory --------------------------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity RJMEM is port
+(
+	clk    	: in std_logic;
+	clr	    : in std_logic;
+	wen	    : in std_logic;
+	r_addr 	: in std_logic_vector (3 DOWNTO 0);
+	w_addr 	: in std_logic_vector (3 DOWNTO 0);
+	datain 	: in std_logic_vector (7 DOWNTO 0);
+	dataout	: out std_logic_vector (7 DOWNTO 0);
+	sum_rj  : out std_logic_vector (8 DOWNTO 0)
+);
+end RJMEM;
+
+architecture RTL of RJMEM is
+  constant MEMSIZE : integer := 16;
+  constant WORDSIZE : integer := 8;
+  subtype wordtype is std_logic_vector(7 downto 0); 
+	type memtype is array (0 to 15) of wordtype;
+	signal MEM :memtype;
+	signal rj_acc : std_logic_vector(8 downto 0);
+
+	begin
+		memory:process(clk,clr)
+			begin
+				--clear
+				if(clr='1')then
+					for j in 0 to 15 loop
+						MEM(j)<=(MEM(j)'range =>'0');
+					end loop;
+					rj_acc <= (rj_acc'range => '1');
+
+				--write
+				elsif clk'event and clk = '1' then
+					if(wen ='1') then
+					 MEM(conv_integer(w_addr))<=datain;
+					end if;
+				end if;
+			end process;
+	--read 
+	dataout <=MEM(conv_integer(r_addr));
+	sum_rj <= rj_acc;
+end RTL;
+
+
+--------------------------------  s2p ------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+
+entity S2P is 
+port
+(
+	CLR	  : in std_logic;
+	CLK	  : in std_logic;
+	SIN	  : in std_logic;
+	POUT 	: out std_logic_vector (15 downto 0)
+);
+end S2P;
+
+architecture RTL of S2P is
+
+signal temp	:std_logic_vector(15 downto 0);
+begin
+process(CLK,CLR) 
+
+	--shift:process(clk,reset)
+	begin
+		if (CLR='1') then
+			TEMP<=(others=>'0');
+			--output<='0';
+		elsif CLK'event and CLK = '0' then
+      TEMP <= TEMP(14 downto 0) & SIN;
+    end if;
+  end process;
+    POUT <= TEMP;
+    
+end RTL;
+--------------------------------1 bit Shifter ------------------------
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+
+entity SHIFT_RIGHT is port
+(
+		clk	     : in std_logic;
+		clr	     : in std_logic;
+		shift	   : in std_logic;
+		load	    : in std_logic;
+		datain 	 : in std_logic_vector (23 DOWNTO 0);
+		dataout  : out std_logic_vector (39 DOWNTO 0)
+);
+end SHIFT_RIGHT;
+
+architecture RTL of SHIFT_RIGHT is
+
+signal temp:std_logic_vector(39 downto 0);
+begin
+	process(clk,clr)
+	begin
+		if clr='1' then
+			temp<=(others=>'0');
+		elsif (CLK'event and CLK = '1') then
+			if (load='1') then
+				temp(39 downto 16)<=datain;
+			elsif shift='1' then
+				temp<=temp(39)&temp(39 downto 1);
+			end if;
+		end if;  
+	end process;
+	dataout<=temp;
+end RTL;
+
+
+
+------------------------- Sign Extender (16 to 24 bits) (same)-----------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity Sign_EXT is port
+(
+	datain 	 : in std_logic_vector (15 DOWNTO 0);
+	dataout 	: out std_logic_vector (23 DOWNTO 0)
+);
+end Sign_EXT;
+
+architecture RTL of SIGN_EXT is
+begin
+Sign_Extender: process(datain)
+begin 
+  for k in 23 downto 16 loop
+    dataout(k) <= datain(15);
+  end loop;
+  dataout(15 downto 0) <= datain;
+end process;
+end RTL;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
