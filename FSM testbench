@@ -1,0 +1,160 @@
+----------------------------------------------------------
+-- File Name: Finite State Machine Testbench Ver 1.3
+-- Usage: Run 400 us
+-- Author: Zhuochun Li
+-- Submission Date: 25 Oct 2018
+-----------------------------------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+entity FSM_TB is
+end FSM_TB;
+architecture Behavioral of FSM_TB is
+
+
+  component FSM
+	port(
+		sclk				:in std_logic; 
+		dclk				:in std_logic;
+		start				:in std_logic;
+		reset_n				:in std_logic;
+		frame				:in std_logic;
+		allzero		                :in std_logic;
+		load_rj_done		        :in std_logic;
+		load_coeff_done	        :in std_logic;
+		dataout_done		        :in std_logic;
+
+		load_rj				:out std_logic;
+		load_coeff			:out std_logic;
+		load_data		        :out std_logic;
+		clr_rj 				:out std_logic;
+		clr_coeff			:out std_logic;
+		clr_data			:out std_logic;
+		inready				:out std_logic;
+		outready 			:out std_logic
+		);
+end component;
+
+constant SHALF   : time := 18.5185185 ns; --half of system colck 26.88MHz
+constant DHALF   : time := 651.041667 ns; --half of data clock 768kHz
+
+signal sclk,dclk, start, reset_n, frame, allzero 	             	: std_logic;
+signal load_rj_done, load_coeff_done,dataout_done              	: std_logic;
+signal load_rj,load_coeff,load_data,clr_rj,clr_coeff,clr_data   : std_logic;
+signal inready, outready		     	                              		: std_logic;
+
+begin
+	start		<='0',
+			  '1' after SHALF*3,
+			  '0' after SHALF*6;
+
+	reset_n		<='0',
+			  '1' after DHALF*121,
+			  '0' after DHALF*127,
+			  '1' after DHALF*651,
+			  '0' after DHALF*652,
+			  '1' after DHALF*655,
+			  '0' after DHALF*659;
+
+	frame		<='0',
+			  '0' after DHALF*1,
+			  '1' after DHALF*3,
+			  '0' after DHALF*39,
+			  '1' after DHALF*41,
+			  '0' after DHALF*77,
+			  '1' after DHALF*79,
+			  '0' after DHALF*109,
+			  '1' after DHALF*111,
+			  '0' after DHALF*133,
+			  '1' after DHALF*135,
+			  '0' after DHALF*165,
+			  '1' after DHALF*167,
+			  '0' after DHALF*197,
+			  '1' after DHALF*199,
+			  '0' after DHALF*229,
+			  '1' after DHALF*231,
+			  '0' after DHALF*261,
+			  '1' after DHALF*263,
+			  '0' after DHALF*293,
+			  '1' after DHALF*295,
+			  '0' after DHALF*325,
+			  '1' after DHALF*327,
+			  '0' after DHALF*357,
+			  '1' after DHALF*359,
+			  '0' after DHALF*389,
+			  '1' after DHALF*391,
+			  '0' after DHALF*421,
+			  '1' after DHALF*423,
+			  '0' after DHALF*453,
+			  '1' after DHALF*455,
+			  '0' after DHALF*485,
+			  '1' after DHALF*487,
+			  '0' after DHALF*517,
+			  '1' after DHALF*519,
+			  '0' after DHALF*549,
+			  '1' after DHALF*551,
+			  '0' after DHALF*581,
+			  '1' after DHALF*583,
+			  '0' after DHALF*613,
+			  '1' after DHALF*615,
+			  '0' after DHALF*645,
+			  '1' after DHALF*647;
+
+allzero			<='0',
+			  '1' after DHALF*197,
+			  '0' after DHALF*421,
+			  '1' after DHALF*517;
+
+
+load_rj_done		<='0',
+			  '1' after DHALF*33,
+			  '0' after DHALF*35;
+
+
+load_coeff_done	<='0',
+			  '1' after DHALF*71,
+			  '0' after DHALF*73;
+
+dataout_done		<='0',
+			  '1' after DHALF*109,
+			  '0' after DHALF*121,
+			  '1' after DHALF*165;
+
+sclkgen  : process
+begin
+   sclk <= '0'; wait for SHALF;
+   sclk <= '1'; wait for SHALF;
+end process;
+
+dclkgen  : process
+begin
+   dclk <= '1'; wait for DHALF;
+   dclk <= '0'; wait for DHALF;
+end process;
+
+fsm_beh : FSM
+port map (
+		sclk				=> sclk,
+		dclk 				=> dclk,
+		start				=> start,
+		reset_n				=>reset_n,
+		frame				=>frame,
+		allzero		                =>allzero,
+		load_rj_done 		        =>load_rj_done,
+		load_coeff_done	        =>load_coeff_done,
+		dataout_done		        =>dataout_done,
+
+		load_rj				=>load_rj,
+		load_coeff			=>load_coeff,
+		clr_rj 				=>clr_rj,
+		clr_coeff			=>clr_coeff,
+		clr_data			=>clr_data,
+		inready				=>inready,
+		load_data		        =>load_data,
+		outready 			=>outready
+);
+ end Behavioral;
+
+
+
+ 
+Sharing settings
