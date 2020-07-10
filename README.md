@@ -23,4 +23,4 @@ The architecture design of MSDAP is showing as following:
 ![image](https://user-images.githubusercontent.com/22983327/50728581-fd4e5a00-10e0-11e9-9da3-2c3b3bf7147e.png)
 
 
-The paper demonstrating the digital chip can be found on https://www.utdallas.edu/~zhoud/EE6306/MSDAP%20paper.pdf
+The paper of this digital chip desmonstrated here can be found on https://www.utdallas.edu/~zhoud/EE6306/MSDAP%20paper.pdf
