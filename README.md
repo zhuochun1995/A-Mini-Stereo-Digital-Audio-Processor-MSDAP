@@ -1,4 +1,4 @@
-# A-Mini-Stereo-Digital-Audio-Processor-MSDAP-
+# A Mini Stereo Digital Audio Processor MSDAP
 The performance of the MSDAP is expected to be the same level as that of two general DSP chips for implementing two-channel FIR digital filtering in audio applications. 
 
 The objective of this project is to implement a low-power mini_stereo digital audio processor, which includes two sperate channels located on the left and right side of human ears. It is programmed with a built-in finite input response filters with up to 256 coefficients. It is designed as a lower power and environmentally friendly electric device.
